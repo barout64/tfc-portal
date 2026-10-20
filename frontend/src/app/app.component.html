@@ -1,0 +1,19 @@
+<nav class="topbar">
+  <a routerLink="/" class="brand">TFC Portal</a>
+  <a routerLink="/catalog">Catalogue</a>
+  @if (auth.role === 'FARMER') {
+    <a routerLink="/sale-requests">My sale requests</a>
+  }
+  @if (auth.role === 'AGRO_DEALER') {
+    <a routerLink="/agro-dealers/me">My sales report</a>
+  }
+  @if (auth.role === 'STAFF') {
+    <a routerLink="/staff">Staff dashboard</a>
+  }
+  <span class="spacer"></span>
+  @if (auth.isLoggedIn) {
+    <span class="who">{{ auth.session()?.displayName }}</span>
+    <button class="link-btn" (click)="logout()">Sign out</button>
+  }
+</nav>
+<router-outlet />

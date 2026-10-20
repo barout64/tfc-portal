@@ -1,0 +1,15 @@
+# Backend (Maven/Spring Boot)
+backend/target/
+backend/data/
+backend/.mvn/wrapper/maven-wrapper.jar
+*.log
+
+# Frontend (Angular)
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
