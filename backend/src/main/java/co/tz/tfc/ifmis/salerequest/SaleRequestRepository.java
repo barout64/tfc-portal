@@ -11,5 +11,7 @@ public interface SaleRequestRepository extends JpaRepository<SaleRequest, Long> 
 
     List<SaleRequest> findByFarmer_IdOrderByReservedAtDesc(Long farmerId);
 
+    List<SaleRequest> findByFarmer_IdAndStatusIn(Long farmerId, List<SaleRequestStatus> statuses);
+
     List<SaleRequest> findByStatusInAndExpiresAtBefore(List<SaleRequestStatus> statuses, java.time.Instant cutoff);
 }

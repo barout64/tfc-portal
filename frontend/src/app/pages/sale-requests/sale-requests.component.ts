@@ -1,12 +1,13 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { PortalApiService } from '../../core/portal-api.service';
 import { SaleRequestResponse } from '../../core/models';
 
 @Component({
   selector: 'app-sale-requests',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   template: `
     <div class="page">
       <h1>My sale requests</h1>
@@ -32,7 +33,12 @@ import { SaleRequestResponse } from '../../core/models';
             {{ request.subsidyAmount | number }}
           </p>
           <p>Reserved {{ request.reservedAt | date: 'medium' }} · Expires {{ request.expiresAt | date: 'medium' }}</p>
-          @if (request.status === 'SUBMITTED' || request.status === 'READY_FOR_PICKUP') {
+          @if (request.status === 'COMPLETED') {
+            <p>Completed {{ request.completedAt | date: 'medium' }} · TFRA ref {{ request.tfraSaleReference }}</p>
+            <a class="btn secondary" [routerLink]="['/sale-requests', request.reference, 'receipt']">View receipt</a>
+          } @else if (request.submittedToTfra) {
+            <p class="muted">Being completed at the warehouse — give staff the code TFRA texts you.</p>
+          } @else if (request.status === 'SUBMITTED' || request.status === 'READY_FOR_PICKUP') {
             <button class="btn secondary" (click)="cancel(request.reference)">Cancel reservation</button>
           }
         </div>
@@ -53,6 +59,8 @@ import { SaleRequestResponse } from '../../core/models';
       .badge.ready_for_pickup { background: #fff4df; color: #9a6400; }
       .badge.completed { background: #e3f6e8; color: #157a33; }
       .badge.expired, .badge.cancelled { background: #f1f1f1; color: #666; }
+      .muted { color: #777; font-size: 13px; }
+      a.btn.secondary { display: inline-block; text-decoration: none; color: #222; }
       .btn.secondary { margin-top: 10px; padding: 8px 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
       .error { color: #b00020; margin-top: 12px; }
       ul { margin: 8px 0; padding-left: 18px; }

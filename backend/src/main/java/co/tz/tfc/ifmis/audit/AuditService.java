@@ -12,11 +12,16 @@ public class AuditService {
     private final AuditEventRepository repository;
 
     public void record(String action, String subjectType, Long subjectId) {
+        record(action, subjectType, subjectId, null);
+    }
+
+    public void record(String action, String subjectType, Long subjectId, Long warehouseId) {
         AuditEvent event = new AuditEvent();
         event.setAction(action);
         event.setSubjectType(subjectType);
         event.setSubjectId(subjectId);
         event.setActor(currentActor());
+        event.setWarehouseId(warehouseId);
         repository.save(event);
     }
 

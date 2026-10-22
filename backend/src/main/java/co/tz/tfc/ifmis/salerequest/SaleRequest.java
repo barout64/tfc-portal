@@ -62,13 +62,32 @@ public class SaleRequest {
 
     private Instant cancelledAt;
 
+    /** TFRA's id for the pending sale, set when staff submit the bag QR codes (step 1 at the counter). */
+    private String tfraPendingSaleId;
+
+    private Instant tfraSubmittedAt;
+
+    /** TFRA's final reference once the farmer's OTP confirmed the sale — shown on the receipt. */
     private String tfraSaleReference;
+
+    @ElementCollection
+    @CollectionTable(name = "sale_request_bag_qr_codes", joinColumns = @JoinColumn(name = "sale_request_id"))
+    @Column(name = "qr_code", nullable = false, length = 120)
+    private List<String> bagQrCodes = new ArrayList<>();
 
     @OneToMany(mappedBy = "saleRequest", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<SaleRequestItem> items = new ArrayList<>();
 
     public boolean isExpired() {
         return Instant.now().isAfter(expiresAt);
+    }
+
+    public int totalBags() {
+        return items.stream().mapToInt(SaleRequestItem::getBagCount).sum();
+    }
+
+    public boolean isSubmittedToTfra() {
+        return tfraPendingSaleId != null;
     }
 
     public boolean isOpen() {

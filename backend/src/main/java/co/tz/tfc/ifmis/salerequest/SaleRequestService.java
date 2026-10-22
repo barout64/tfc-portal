@@ -7,7 +7,10 @@ import co.tz.tfc.ifmis.common.exception.ApiException;
 import co.tz.tfc.ifmis.common.exception.NotFoundException;
 import co.tz.tfc.ifmis.esb.TfraClient;
 import co.tz.tfc.ifmis.esb.dto.TfraFarmerDetails;
+import co.tz.tfc.ifmis.farmer.EntitlementService;
 import co.tz.tfc.ifmis.salerequest.dto.CreateSaleRequestRequest;
+import co.tz.tfc.ifmis.staff.StaffAccess;
+import co.tz.tfc.ifmis.staff.StaffUser;
 import co.tz.tfc.ifmis.user.PortalUser;
 import co.tz.tfc.ifmis.user.PortalUserRepository;
 import co.tz.tfc.ifmis.warehouse.Warehouse;
@@ -21,14 +24,17 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
  * Prepares a subsidised sale (reserve stock, compute amounts) and later hands off to a warehouse
- * staff member to finish it for real against TFRA (QR scan + OTP) — see {@link #complete}.
+ * staff member to finish it for real against TFRA, in the order TFRA expects:
+ * {@link #submitToTfra} (bag QR codes) → {@link #requestFarmerOtp} → {@link #complete} (farmer's OTP).
  */
 @Service
 @RequiredArgsConstructor
@@ -41,11 +47,14 @@ public class SaleRequestService {
     private final WarehouseRepository warehouseRepository;
     private final ProductRepository productRepository;
     private final TfraClient tfraClient;
+    private final EntitlementService entitlementService;
+    private final StaffAccess staffAccess;
     private final AuditService auditService;
 
     @Transactional
     public SaleRequest create(Long farmerId, CreateSaleRequestRequest request) {
-        PortalUser farmer = portalUserRepository.findById(farmerId)
+        // Locked so two concurrent requests from the same farmer can't both fit in the same remaining entitlement.
+        PortalUser farmer = portalUserRepository.findForUpdate(farmerId)
                 .orElseThrow(() -> new NotFoundException("Farmer account not found."));
 
         Warehouse warehouse = warehouseRepository.findById(request.warehouseId())
@@ -61,8 +70,8 @@ public class SaleRequestService {
             throw new ApiException(HttpStatus.FORBIDDEN, "This farmer is not currently eligible for the subsidy programme.");
         }
 
-        // Entitlement is checked against what TFRA reports for this request alone; TFRA is the
-        // system of record for how much of it earlier requests already consumed.
+        // Remaining = entitled - already received (TFRA) - held by this farmer's other open reservations.
+        Map<String, EntitlementService.Line> remaining = entitlementService.summarise(farmer.getId(), details);
         Map<String, Integer> requestedKgByType = new HashMap<>();
 
         SaleRequest saleRequest = new SaleRequest();
@@ -74,8 +83,16 @@ public class SaleRequestService {
         BigDecimal totalAmount = BigDecimal.ZERO;
         BigDecimal farmerCashAmount = BigDecimal.ZERO;
 
-        for (CreateSaleRequestRequest.Line line : request.items()) {
-            Product product = productRepository.findById(line.productId())
+        // Lock products in a fixed order so two reservations touching the same products can't deadlock.
+        List<CreateSaleRequestRequest.Line> lines = request.items().stream()
+                .sorted(Comparator.comparing(CreateSaleRequestRequest.Line::productId))
+                .toList();
+        if (lines.stream().map(CreateSaleRequestRequest.Line::productId).distinct().count() != lines.size()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Each product can only appear once in a request.");
+        }
+
+        for (CreateSaleRequestRequest.Line line : lines) {
+            Product product = productRepository.findForUpdate(line.productId())
                     .orElseThrow(() -> new NotFoundException("Product not found."));
             if (!product.isActive() || !product.getWarehouse().getId().equals(warehouse.getId())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "Product " + product.getName() + " is not available at this warehouse.");
@@ -87,11 +104,13 @@ public class SaleRequestService {
                 throw new ApiException(HttpStatus.CONFLICT, product.getName() + " does not have enough stock for this request.");
             }
 
-            int requestedKg = product.getBagSizeKg() * line.bagCount();
-            requestedKgByType.merge(product.getType().name(), requestedKg, Integer::sum);
-            Integer entitlementKg = details.entitlementByType().get(product.getType().name());
-            if (entitlementKg == null || requestedKgByType.get(product.getType().name()) > entitlementKg) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "This request exceeds the farmer's remaining " + product.getType() + " entitlement.");
+            String type = product.getType().name();
+            int requestedKg = requestedKgByType.merge(type, product.getBagSizeKg() * line.bagCount(), Integer::sum);
+            EntitlementService.Line entitlement = remaining.get(type);
+            if (entitlement == null || requestedKg > entitlement.remainingKg()) {
+                int left = entitlement == null ? 0 : entitlement.remainingKg();
+                throw new ApiException(HttpStatus.FORBIDDEN,
+                        "This request exceeds your remaining " + type + " entitlement (" + left + " kg left).");
             }
 
             product.setInternalQuantity(product.getInternalQuantity() - line.bagCount());
@@ -114,7 +133,7 @@ public class SaleRequestService {
         saleRequest.setSubsidyAmount(totalAmount.subtract(farmerCashAmount));
 
         saleRequest = saleRequestRepository.save(saleRequest);
-        auditService.record("SALE_REQUEST_CREATED", "SaleRequest", saleRequest.getId());
+        auditService.record("SALE_REQUEST_CREATED", "SaleRequest", saleRequest.getId(), warehouse.getId());
         return saleRequest;
     }
 
@@ -124,53 +143,113 @@ public class SaleRequestService {
         if (!saleRequest.isOpen()) {
             throw new ApiException(HttpStatus.CONFLICT, "This request can no longer be cancelled.");
         }
+        if (saleRequest.isSubmittedToTfra()) {
+            throw new ApiException(HttpStatus.CONFLICT, "This sale is already being completed at the warehouse and can't be cancelled online.");
+        }
         restock(saleRequest);
         saleRequest.setStatus(SaleRequestStatus.CANCELLED);
         saleRequest.setCancelledAt(Instant.now());
-        auditService.record("SALE_REQUEST_CANCELLED", "SaleRequest", saleRequest.getId());
+        auditService.record("SALE_REQUEST_CANCELLED", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
         return saleRequest;
     }
 
+    @Transactional(readOnly = true)
+    public SaleRequest findForStaff(StaffUser staff, String reference) {
+        SaleRequest saleRequest = saleRequestRepository.findByReference(reference)
+                .orElseThrow(() -> new NotFoundException("Sale request not found."));
+        staffAccess.requireWarehouse(staff, saleRequest.getWarehouse());
+        return saleRequest;
+    }
+
+    /** Staff opens the request at the counter once the farmer has arrived and paid the cash part. */
     @Transactional
-    public SaleRequest startPickup(String reference) {
-        SaleRequest saleRequest = requireOpenByReference(reference);
+    public SaleRequest startPickup(StaffUser staff, String reference) {
+        SaleRequest saleRequest = requireOpenForStaff(staff, reference);
         if (saleRequest.getStatus() != SaleRequestStatus.SUBMITTED) {
             throw new ApiException(HttpStatus.CONFLICT, "This request is not awaiting pickup.");
         }
         saleRequest.setStatus(SaleRequestStatus.READY_FOR_PICKUP);
-        auditService.record("SALE_REQUEST_READY_FOR_PICKUP", "SaleRequest", saleRequest.getId());
+        auditService.record("SALE_REQUEST_READY_FOR_PICKUP", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
         return saleRequest;
     }
 
-    /** Staff-side finish: scan the physical bag QR codes, then confirm with the farmer's OTP. */
+    /** Counter step 1: submit the sale to TFRA with the QR code of every bag being handed over. */
     @Transactional
-    public SaleRequest complete(String reference, List<String> bagQrCodes, String otp, Long staffId) {
-        SaleRequest saleRequest = requireOpenByReference(reference);
-
-        if (!tfraClient.scanBagQrCodes(reference, bagQrCodes)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "The bag QR codes could not be validated with TFRA.");
+    public SaleRequest submitToTfra(StaffUser staff, String reference, List<String> bagQrCodes) {
+        SaleRequest saleRequest = requireOpenForStaff(staff, reference);
+        if (saleRequest.getStatus() != SaleRequestStatus.READY_FOR_PICKUP) {
+            throw new ApiException(HttpStatus.CONFLICT, "Mark the request ready for pickup first.");
         }
-        String tfraReference = tfraClient.confirmSale(reference, otp)
+        if (saleRequest.isSubmittedToTfra()) {
+            throw new ApiException(HttpStatus.CONFLICT, "This sale was already submitted to TFRA — request the farmer's OTP next.");
+        }
+        List<String> codes = bagQrCodes.stream().map(String::trim).filter(c -> !c.isEmpty()).toList();
+        if (new HashSet<>(codes).size() != codes.size()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "The same bag QR code was scanned more than once.");
+        }
+        if (codes.size() != saleRequest.totalBags()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "Scan exactly one QR code per bag: expected " + saleRequest.totalBags() + ", got " + codes.size() + ".");
+        }
+
+        String tfraPendingSaleId = tfraClient.submitSale(saleRequest.getWarehouse().getTfraWarehouseId(),
+                        saleRequest.getFarmer().getTfraNumber(), saleRequest.getReference(), codes)
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "TFRA rejected these bag QR codes."));
+
+        saleRequest.getBagQrCodes().clear();
+        saleRequest.getBagQrCodes().addAll(codes);
+        saleRequest.setTfraPendingSaleId(tfraPendingSaleId);
+        saleRequest.setTfraSubmittedAt(Instant.now());
+        auditService.record("SALE_REQUEST_SUBMITTED_TO_TFRA", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
+        return saleRequest;
+    }
+
+    /** Counter step 2: TFRA texts the farmer an OTP for the pending sale. */
+    @Transactional
+    public String requestFarmerOtp(StaffUser staff, String reference) {
+        SaleRequest saleRequest = requireOpenForStaff(staff, reference);
+        if (!saleRequest.isSubmittedToTfra()) {
+            throw new ApiException(HttpStatus.CONFLICT, "Submit the bag QR codes to TFRA first.");
+        }
+        String requestId = tfraClient.requestOtp(saleRequest.getWarehouse().getTfraWarehouseId(),
+                saleRequest.getFarmer().getTfraNumber(), saleRequest.getTfraPendingSaleId());
+        auditService.record("SALE_REQUEST_OTP_REQUESTED", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
+        return requestId;
+    }
+
+    /** Counter step 3: confirm with the OTP the farmer read from their SMS — finalises the sale. */
+    @Transactional
+    public SaleRequest complete(StaffUser staff, String reference, String otp) {
+        SaleRequest saleRequest = requireOpenForStaff(staff, reference);
+        if (!saleRequest.isSubmittedToTfra()) {
+            throw new ApiException(HttpStatus.CONFLICT, "Submit the bag QR codes to TFRA first.");
+        }
+        String tfraReference = tfraClient.confirmSale(saleRequest.getWarehouse().getTfraWarehouseId(), saleRequest.getTfraPendingSaleId(), otp)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "The farmer's OTP is incorrect or has expired."));
 
         saleRequest.setStatus(SaleRequestStatus.COMPLETED);
         saleRequest.setCompletedAt(Instant.now());
-        saleRequest.setCompletedBy(staffId);
+        saleRequest.setCompletedBy(staff.getId());
         saleRequest.setTfraSaleReference(tfraReference);
-        auditService.record("SALE_REQUEST_COMPLETED", "SaleRequest", saleRequest.getId());
+        auditService.record("SALE_REQUEST_COMPLETED", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
         return saleRequest;
     }
 
-    /** Releases stock held by any reservation whose 48-hour window has passed. Run periodically. */
+    /**
+     * Releases stock held by any reservation whose 48-hour window has passed. Run periodically.
+     * Requests already submitted to TFRA are left for staff to finish — their bags are at the counter.
+     */
     @Scheduled(fixedRate = 15, timeUnit = java.util.concurrent.TimeUnit.MINUTES)
     @Transactional
     public void expireStaleReservations() {
         List<SaleRequest> stale = saleRequestRepository.findByStatusInAndExpiresAtBefore(
-                List.of(SaleRequestStatus.SUBMITTED, SaleRequestStatus.READY_FOR_PICKUP), Instant.now());
+                List.of(SaleRequestStatus.SUBMITTED, SaleRequestStatus.READY_FOR_PICKUP), Instant.now()).stream()
+                .filter(r -> !r.isSubmittedToTfra())
+                .toList();
         for (SaleRequest saleRequest : stale) {
             restock(saleRequest);
             saleRequest.setStatus(SaleRequestStatus.EXPIRED);
-            auditService.record("SALE_REQUEST_EXPIRED", "SaleRequest", saleRequest.getId());
+            auditService.record("SALE_REQUEST_EXPIRED", "SaleRequest", saleRequest.getId(), saleRequest.getWarehouse().getId());
         }
         if (!stale.isEmpty()) {
             saleRequestRepository.saveAll(stale);
@@ -179,7 +258,7 @@ public class SaleRequestService {
 
     private void restock(SaleRequest saleRequest) {
         for (SaleRequestItem item : saleRequest.getItems()) {
-            Product product = item.getProduct();
+            Product product = productRepository.findForUpdate(item.getProduct().getId()).orElseThrow();
             product.setInternalQuantity(product.getInternalQuantity() + item.getBagCount());
             productRepository.save(product);
         }
@@ -194,13 +273,13 @@ public class SaleRequestService {
         return saleRequest;
     }
 
-    private SaleRequest requireOpenByReference(String reference) {
-        SaleRequest saleRequest = saleRequestRepository.findByReference(reference)
-                .orElseThrow(() -> new NotFoundException("Sale request not found."));
+    private SaleRequest requireOpenForStaff(StaffUser staff, String reference) {
+        SaleRequest saleRequest = findForStaff(staff, reference);
         if (!saleRequest.isOpen()) {
             throw new ApiException(HttpStatus.CONFLICT, "This sale request is not open.");
         }
-        if (saleRequest.isExpired()) {
+        // Once submitted to TFRA the bags are physically at the counter, so let staff finish even past expiry.
+        if (saleRequest.isExpired() && !saleRequest.isSubmittedToTfra()) {
             throw new ApiException(HttpStatus.CONFLICT, "This reservation has expired.");
         }
         return saleRequest;

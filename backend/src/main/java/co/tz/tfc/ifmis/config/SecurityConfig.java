@@ -1,6 +1,7 @@
 package co.tz.tfc.ifmis.config;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -24,6 +25,10 @@ public class SecurityConfig {
     private final JwtAuthFilter jwtAuthFilter;
     private final RateLimitFilter rateLimitFilter;
 
+    /** Comma-separated origins allowed to call the API from a browser, e.g. https://portal.tfc.co.tz */
+    @Value("${tfc.cors.allowed-origins}")
+    private List<String> allowedOrigins;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
@@ -34,6 +39,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**", "/api/catalog/**", "/actuator/health").permitAll()
                         .requestMatchers("/api/staff/**").hasRole("STAFF")
                         .requestMatchers("/api/agro-dealers/**").hasRole("AGRO_DEALER")
+                        .requestMatchers("/api/farmers/**").hasRole("FARMER")
                         .requestMatchers("/api/sale-requests/**").hasRole("FARMER")
                         .anyRequest().authenticated())
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
@@ -48,7 +54,7 @@ public class SecurityConfig {
 
     private CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of("http://localhost:4200"));
+        configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);

@@ -31,6 +31,9 @@ public class AuditEvent {
     @Column(length = 60)
     private String actor;
 
+    /** Warehouse the action concerns, when there is one — so "which warehouse" is answerable from the log. */
+    private Long warehouseId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 }

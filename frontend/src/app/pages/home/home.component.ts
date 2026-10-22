@@ -19,13 +19,13 @@ import { RouterLink } from '@angular/router';
       </div>
       <div class="card">
         <h2>Agro-dealer</h2>
-        <p>Register with your TFRA agro-dealer number to browse the wholesale catalogue and view your sales reports.</p>
+        <p>Register with your TFRA agro-dealer number to browse the catalogue, send wholesale inquiries and orders, and view your TFRA sales reports.</p>
         <a routerLink="/agro-dealers/register" class="btn">Register as an agro-dealer</a>
         <a routerLink="/agro-dealers/login" class="btn secondary">I already have an account</a>
       </div>
       <div class="card">
         <h2>Warehouse staff</h2>
-        <p>Complete a reserved sale request with the farmer at the counter.</p>
+        <p>Complete reserved sales with farmers at the counter and handle agro-dealer orders.</p>
         <a routerLink="/staff/login" class="btn">Staff sign in</a>
       </div>
     </div>

@@ -5,12 +5,13 @@ import co.tz.tfc.ifmis.esb.dto.TfraAgroDealerSalesReport;
 import co.tz.tfc.ifmis.esb.dto.TfraFarmerDetails;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 /**
  * Everything the portal needs from TFRA, routed through the Gov-ESB gateway. The browser never
  * calls this directly and never sees a warehouse's TFRA client_id/client_secret — only this
- * server-side layer does, using credentials configured per warehouse.
+ * server-side layer does, using credentials configured per warehouse ({@code tfraWarehouseId}).
  */
 public interface TfraClient {
 
@@ -18,14 +19,17 @@ public interface TfraClient {
 
     Optional<TfraAgroDealerProfile> verifyAgroDealer(String tfraDealerNumber);
 
-    /** Sends an OTP SMS to the phone TFRA has on file for this farmer/dealer; returns an opaque request id. */
-    String requestOtp(String tfraNumber);
+    /**
+     * Staff-side step 1 — {@code /tfra/sales/scan-qr-code}: submits the sale to TFRA with the bag QR
+     * codes being handed over. Returns TFRA's id for the pending sale, or empty if TFRA rejected it.
+     */
+    Optional<String> submitSale(String tfraWarehouseId, String farmerNumber, String portalReference, List<String> bagQrCodes);
 
-    /** Staff-side: scans the bag QR codes for a completed sale request against TFRA. */
-    boolean scanBagQrCodes(String saleRequestReference, java.util.List<String> bagQrCodes);
+    /** Staff-side step 2 — {@code /tfra/farmers/request-otp}: TFRA texts the farmer an OTP for this pending sale. */
+    String requestOtp(String tfraWarehouseId, String farmerNumber, String tfraSaleId);
 
-    /** Staff-side: confirms the sale with the farmer's OTP, which finalises the TFRA-side stock-out. */
-    Optional<String> confirmSale(String saleRequestReference, String otp);
+    /** Staff-side step 3 — {@code /tfra/sales/confirm}: confirms with the farmer's OTP; returns TFRA's final sale reference. */
+    Optional<String> confirmSale(String tfraWarehouseId, String tfraSaleId, String otp);
 
     TfraAgroDealerSalesReport getAgroDealerSales(String tfraDealerNumber, LocalDate from, LocalDate to);
 }

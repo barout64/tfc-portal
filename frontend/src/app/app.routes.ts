@@ -7,6 +7,9 @@ import { SaleRequestsComponent } from './pages/sale-requests/sale-requests.compo
 import { AgroDealerComponent } from './pages/agro-dealer/agro-dealer.component';
 import { StaffLoginComponent } from './pages/staff-login/staff-login.component';
 import { StaffDashboardComponent } from './pages/staff-dashboard/staff-dashboard.component';
+import { FarmerProfileComponent } from './pages/farmer-profile/farmer-profile.component';
+import { ReceiptComponent } from './pages/receipt/receipt.component';
+import { StaffDealerOrdersComponent } from './pages/staff-dealer-orders/staff-dealer-orders.component';
 import { roleGuard } from './core/role.guard';
 
 export const routes: Routes = [
@@ -16,9 +19,12 @@ export const routes: Routes = [
   { path: 'agro-dealers/register', component: RegisterComponent, data: { audience: 'agro-dealers' } },
   { path: 'agro-dealers/login', component: LoginComponent, data: { audience: 'agro-dealers' } },
   { path: 'catalog', component: CatalogComponent },
+  { path: 'farmers/me', component: FarmerProfileComponent, canActivate: [roleGuard(['FARMER'])] },
   { path: 'sale-requests', component: SaleRequestsComponent, canActivate: [roleGuard(['FARMER'])] },
+  { path: 'sale-requests/:reference/receipt', component: ReceiptComponent, canActivate: [roleGuard(['FARMER'])] },
   { path: 'agro-dealers/me', component: AgroDealerComponent, canActivate: [roleGuard(['AGRO_DEALER'])] },
   { path: 'staff/login', component: StaffLoginComponent },
   { path: 'staff', component: StaffDashboardComponent, canActivate: [roleGuard(['STAFF'])] },
+  { path: 'staff/dealer-orders', component: StaffDealerOrdersComponent, canActivate: [roleGuard(['STAFF'])] },
   { path: '**', redirectTo: '' }
 ];

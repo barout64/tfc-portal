@@ -2,13 +2,15 @@
   <a routerLink="/" class="brand">TFC Portal</a>
   <a routerLink="/catalog">Catalogue</a>
   @if (auth.role === 'FARMER') {
+    <a routerLink="/farmers/me">My entitlement</a>
     <a routerLink="/sale-requests">My sale requests</a>
   }
   @if (auth.role === 'AGRO_DEALER') {
-    <a routerLink="/agro-dealers/me">My sales report</a>
+    <a routerLink="/agro-dealers/me">My orders &amp; sales</a>
   }
   @if (auth.role === 'STAFF') {
-    <a routerLink="/staff">Staff dashboard</a>
+    <a routerLink="/staff">Sale requests</a>
+    <a routerLink="/staff/dealer-orders">Dealer orders</a>
   }
   <span class="spacer"></span>
   @if (auth.isLoggedIn) {

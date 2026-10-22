@@ -38,7 +38,9 @@ public class TfraClientStub implements TfraClient {
                 "+2557" + String.format("%08d", Math.abs(farmerNumber.hashCode()) % 100000000),
                 true,
                 false,
-                Map.of("FERTILIZER", 150, "SEEDS", 20)
+                Map.of("FERTILIZER", 150, "SEEDS", 20),
+                List.of(),
+                List.of()
         ));
     }
 
@@ -57,21 +59,26 @@ public class TfraClientStub implements TfraClient {
     }
 
     @Override
-    public String requestOtp(String tfraNumber) {
+    public Optional<String> submitSale(String tfraWarehouseId, String farmerNumber, String portalReference, List<String> bagQrCodes) {
+        log.warn("[TfraClientStub] submitSale({}, {}, {}, {} codes) — accepted without real TFRA validation",
+                tfraWarehouseId, farmerNumber, portalReference, bagQrCodes.size());
+        if (bagQrCodes.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of("STUB-PENDING-" + UUID.randomUUID());
+    }
+
+    @Override
+    public String requestOtp(String tfraWarehouseId, String farmerNumber, String tfraSaleId) {
         String requestId = UUID.randomUUID().toString();
-        log.warn("[TfraClientStub] requestOtp({}) -> requestId={} — no real SMS was sent by TFRA", tfraNumber, requestId);
+        log.warn("[TfraClientStub] requestOtp({}, {}, {}) -> requestId={} — no real SMS was sent by TFRA; any non-blank OTP is accepted",
+                tfraWarehouseId, farmerNumber, tfraSaleId, requestId);
         return requestId;
     }
 
     @Override
-    public boolean scanBagQrCodes(String saleRequestReference, List<String> bagQrCodes) {
-        log.warn("[TfraClientStub] scanBagQrCodes({}, {} codes) — accepted without real TFRA validation", saleRequestReference, bagQrCodes.size());
-        return !bagQrCodes.isEmpty();
-    }
-
-    @Override
-    public Optional<String> confirmSale(String saleRequestReference, String otp) {
-        log.warn("[TfraClientStub] confirmSale({}, otp={}) — accepted without real TFRA confirmation", saleRequestReference, otp);
+    public Optional<String> confirmSale(String tfraWarehouseId, String tfraSaleId, String otp) {
+        log.warn("[TfraClientStub] confirmSale({}, {}, otp={}) — accepted without real TFRA confirmation", tfraWarehouseId, tfraSaleId, otp);
         if (otp == null || otp.isBlank()) {
             return Optional.empty();
         }
